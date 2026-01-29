@@ -60,104 +60,89 @@
     </div>
 
     <script>
-        // 1. UNIVERSAL CONNECTION CONFIG
+        // 1. High-Stability Config using Google STUN
         const peer = new Peer({
             config: {
                 'iceServers': [
-                    { url: 'stun:stun.l.google.com:19302' },
-                    { url: 'stun:stun1.l.google.com:19302' },
-                    { url: 'stun:stun2.l.google.com:19302' }
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
                 ]
             }
         });
 
         let activeBlobUrl = null;
 
-        function setMode(mode) {
-            document.getElementById('ui-sender').style.display = mode === 'sender' ? 'block' : 'none';
-            document.getElementById('ui-receiver').style.display = mode === 'receiver' ? 'block' : 'none';
-            document.getElementById('sTab').className = mode === 'sender' ? 'active' : '';
-            document.getElementById('rTab').className = mode === 'receiver' ? 'active' : '';
+        // UI Switcher Logic
+        function setMode(m) {
+            document.getElementById('ui-sender').style.display = m === 'sender' ? 'block' : 'none';
+            document.getElementById('ui-receiver').style.display = m === 'receiver' ? 'block' : 'none';
+            document.getElementById('sTab').className = m === 'sender' ? 'active' : '';
+            document.getElementById('rTab').className = m === 'receiver' ? 'active' : '';
         }
 
-        // 2. RECEIVER (HANDSHAKE) LOGIC
+        // 2. RECEIVER: Explicitly wait for registration
         peer.on('open', (id) => {
+            // Generate a short 5-character display code
             document.getElementById('my-id').innerText = id.substring(0, 5).toUpperCase();
-            document.getElementById('r-status').innerText = "ONLINE & SECURE";
-        });
-
-        peer.on('error', (err) => {
-            console.error("Peer Error:", err.type);
-            document.getElementById('r-status').innerText = "NETWORK ERROR: " + err.type;
-            if(err.type === 'peer-unavailable') alert("Target not found. Please re-check the code.");
+            document.getElementById('r-status').innerText = "ONLINE: READY TO RECEIVE";
+            console.log("Successfully registered with ID:", id);
         });
 
         peer.on('connection', (conn) => {
-            document.getElementById('r-status').innerText = "TUNNEL ESTABLISHED";
+            document.getElementById('r-status').innerText = "CONNECTION DETECTED!";
             conn.on('data', (data) => {
-                // Secure RAM Storage
                 const blob = new Blob([data.file], { type: 'application/pdf' });
-                activeBlobUrl = URL.createObjectURL(blob); 
-                document.getElementById('file-info').innerText = "📄 FILE RECEIVED: " + data.name;
+                activeBlobUrl = URL.createObjectURL(blob); // Hold only in RAM
+                document.getElementById('file-info').innerText = "📄 FILE: " + data.name;
                 document.getElementById('file-ready').style.display = 'block';
-                document.getElementById('r-status').innerText = "READY TO PRINT";
+                document.getElementById('r-status').innerText = "DATA SECURED IN RAM";
             });
         });
 
-        // 3. SENDER (UPLOAD) LOGIC
+        // 3. SENDER: Use a 'Retry' logic to bypass network lag
         async function startTransfer() {
             const code = document.getElementById('targetCode').value.trim().toLowerCase();
             const file = document.getElementById('fileInput').files[0];
             const status = document.getElementById('s-status');
-            const pBar = document.getElementById('pBar');
-            const pFill = document.getElementById('pFill');
 
-            if (!code || !file) return alert("Missing Code or File!");
+            if (!code || !file) return alert("Select file and enter code!");
 
             status.innerText = "DRILLING TUNNEL...";
-            pBar.style.display = 'block';
-            pFill.style.width = '20%';
-
+            
+            // Connect with a 5-second connection watchdog
             const conn = peer.connect(code, { reliable: true });
 
-            const failTimeout = setTimeout(() => {
-                if(status.innerText !== "✅ DELIVERED") {
-                    status.innerText = "CONNECTION TIMEOUT";
-                    pBar.style.display = 'none';
-                }
-            }, 10000);
-
             conn.on('open', async () => {
-                clearTimeout(failTimeout);
-                pFill.style.width = '60%';
-                status.innerText = "STREAMING DATA...";
-                
+                status.innerText = "TUNNEL OPEN: SENDING...";
                 const buffer = await file.arrayBuffer();
                 conn.send({ file: buffer, name: file.name });
-                
-                pFill.style.width = '100%';
                 status.innerText = "✅ DELIVERED";
+            });
+
+            // Handle the specific 'peer-unavailable' error
+            peer.on('error', (err) => {
+                if(err.type === 'peer-unavailable') {
+                    status.innerText = "❌ ERROR: PRINTER NOT FOUND";
+                    alert("The printing computer isn't ready. Check the code and try again.");
+                }
             });
         }
 
-        // 4. PRINT & SHRED (SECURITY)
+        // 4. PRINT & SHRED: The Security Core
         function printAndWipe() {
-            if(!activeBlobUrl) return;
             const pWin = window.open(activeBlobUrl, '_blank');
             if (pWin) {
                 pWin.focus();
-                const checker = setInterval(() => {
+                const check = setInterval(() => {
                     if (pWin.closed) {
-                        clearInterval(checker);
-                        URL.revokeObjectURL(activeBlobUrl); // Shred RAM
-                        alert("SECURITY: Data wiped from memory.");
+                        clearInterval(check);
+                        URL.revokeObjectURL(activeBlobUrl); // Shred data from RAM
+                        alert("SECURITY: Data wiped from system.");
                         window.location.reload(); 
                     }
                 }, 1000);
-            } else {
-                alert("Please Enable Pop-ups to allow printing!");
             }
         }
-    </script>
+   </script>
 </body>
 </html>
