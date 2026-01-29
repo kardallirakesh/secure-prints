@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SecurePrint | Unified Portal</title>
+    <title>SecurePrint | Universal Node</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        :root { --neon: #38bdf8; --bg: #050505; }
+        :root { --neon: #38bdf8; --bg: #050505; --success: #4ade80; }
         body {
             margin: 0; font-family: 'Segoe UI', sans-serif; background: var(--bg);
             background-image: radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%);
-            height: 100vh; display: flex; justify-content: center; align-items: center; color: white;
+            height: 100vh; display: flex; justify-content: center; align-items: center; color: white; overflow: hidden;
         }
         .glass-card {
             background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(20px);
@@ -20,14 +20,17 @@
         .switcher { display: flex; background: rgba(0,0,0,0.3); padding: 5px; border-radius: 15px; margin-bottom: 25px; }
         .switcher button {
             flex: 1; padding: 12px; border: none; background: transparent;
-            color: #888; cursor: pointer; border-radius: 10px; font-weight: bold;
+            color: #888; cursor: pointer; border-radius: 10px; font-weight: bold; transition: 0.3s;
         }
         .switcher button.active { background: rgba(56, 189, 248, 0.1); color: var(--neon); }
         .id-badge { font-size: 42px; font-weight: 900; text-shadow: 0 0 20px var(--neon); margin: 20px 0; font-family: monospace; letter-spacing: 5px; }
-        input, .btn-main { width: 100%; padding: 15px; margin: 10px 0; border-radius: 12px; font-size: 16px; border: 1px solid rgba(255,255,255,0.1); }
+        input, .btn-main { width: 100%; padding: 15px; margin: 10px 0; border-radius: 12px; font-size: 16px; border: 1px solid rgba(255,255,255,0.1); box-sizing: border-box; }
         input { background: rgba(255,255,255,0.05); color: white; text-align: center; }
-        .btn-main { background: var(--neon); color: black; font-weight: bold; cursor: pointer; border: none; box-shadow: 0 0 20px rgba(56, 189, 248, 0.4); }
-        .status { font-size: 10px; letter-spacing: 2px; color: var(--neon); text-transform: uppercase; margin-bottom: 15px; }
+        .btn-main { background: var(--neon); color: black; font-weight: bold; cursor: pointer; border: none; transition: 0.3s; }
+        .btn-main:hover { opacity: 0.8; transform: scale(0.98); }
+        .status { font-size: 10px; letter-spacing: 2px; color: var(--neon); text-transform: uppercase; margin-bottom: 15px; font-weight: bold; }
+        .progress-bar { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin-top: 10px; overflow: hidden; display: none; }
+        .progress-fill { height: 100%; background: var(--success); width: 0%; transition: width 0.3s; }
     </style>
 </head>
 <body>
@@ -39,26 +42,35 @@
         </div>
 
         <div id="ui-receiver">
-            <div class="status" id="r-status">INITIALIZING...</div>
-            <p style="font-size: 0.8rem; color: #94a3b8;">Customer enters this code:</p>
+            <div class="status" id="r-status">CONNECTING TO NETWORK...</div>
             <div id="my-id" class="id-badge">----</div>
-            
             <div id="file-ready" style="display:none">
-                <p id="file-info" style="color:#4ade80; font-weight: bold; font-size: 0.9rem;"></p>
+                <p id="file-info" style="color:var(--success); font-size: 0.9rem; margin-bottom: 20px;"></p>
                 <button class="btn-main" onclick="printAndWipe()">PRINT & SHRED DATA</button>
             </div>
         </div>
 
         <div id="ui-sender" style="display: none;">
-            <div class="status" id="s-status">SECURE TUNNEL READY</div>
-            <input type="text" id="targetCode" placeholder="ENTER 5-DIGIT CODE">
+            <div class="status" id="s-status">SECURE TUNNEL IDLE</div>
+            <input type="text" id="targetCode" placeholder="ENTER 5-DIGIT CODE" maxlength="5">
             <input type="file" id="fileInput" accept="application/pdf">
-            <button class="btn-main" onclick="startTransfer()">PUSH TO PRINTER</button>
+            <button class="btn-main" id="sendBtn" onclick="startTransfer()">PUSH TO PRINTER</button>
+            <div class="progress-bar" id="pBar"><div class="progress-fill" id="pFill"></div></div>
         </div>
     </div>
 
     <script>
-        const peer = new Peer();
+        // 1. UNIVERSAL CONNECTION CONFIG
+        const peer = new Peer({
+            config: {
+                'iceServers': [
+                    { url: 'stun:stun.l.google.com:19302' },
+                    { url: 'stun:stun1.l.google.com:19302' },
+                    { url: 'stun:stun2.l.google.com:19302' }
+                ]
+            }
+        });
+
         let activeBlobUrl = null;
 
         function setMode(mode) {
@@ -68,56 +80,83 @@
             document.getElementById('rTab').className = mode === 'receiver' ? 'active' : '';
         }
 
-        // --- RECEIVER LOGIC ---
+        // 2. RECEIVER (HANDSHAKE) LOGIC
         peer.on('open', (id) => {
             document.getElementById('my-id').innerText = id.substring(0, 5).toUpperCase();
             document.getElementById('r-status').innerText = "ONLINE & SECURE";
         });
 
+        peer.on('error', (err) => {
+            console.error("Peer Error:", err.type);
+            document.getElementById('r-status').innerText = "NETWORK ERROR: " + err.type;
+            if(err.type === 'peer-unavailable') alert("Target not found. Please re-check the code.");
+        });
+
         peer.on('connection', (conn) => {
-            document.getElementById('r-status').innerText = "RECEIVING...";
+            document.getElementById('r-status').innerText = "TUNNEL ESTABLISHED";
             conn.on('data', (data) => {
+                // Secure RAM Storage
                 const blob = new Blob([data.file], { type: 'application/pdf' });
-                activeBlobUrl = URL.createObjectURL(blob); // Load into RAM
-                document.getElementById('file-info').innerText = "📄 " + data.name;
+                activeBlobUrl = URL.createObjectURL(blob); 
+                document.getElementById('file-info').innerText = "📄 FILE RECEIVED: " + data.name;
                 document.getElementById('file-ready').style.display = 'block';
-                document.getElementById('r-status').innerText = "DATA IN MEMORY";
+                document.getElementById('r-status').innerText = "READY TO PRINT";
             });
         });
 
-        function printAndWipe() {
-            const printWindow = window.open(activeBlobUrl, '_blank'); // Open RAM link
-            if (printWindow) {
-                printWindow.focus();
-                const checkStatus = setInterval(() => {
-                    if (printWindow.closed) {
-                        clearInterval(checkStatus);
-                        URL.revokeObjectURL(activeBlobUrl); // Shred the data
-                        alert("SECURITY PROTOCOL: RAM Wiped. File erased from system memory.");
-                        window.location.reload(); 
-                    }
-                }, 1000);
-            }
-        }
-
-        // --- SENDER LOGIC ---
+        // 3. SENDER (UPLOAD) LOGIC
         async function startTransfer() {
             const code = document.getElementById('targetCode').value.trim().toLowerCase();
             const file = document.getElementById('fileInput').files[0];
             const status = document.getElementById('s-status');
+            const pBar = document.getElementById('pBar');
+            const pFill = document.getElementById('pFill');
 
-            if (!code || !file) return alert("Enter code and select a PDF!");
+            if (!code || !file) return alert("Missing Code or File!");
 
-            status.innerText = "ESTABLISHING TUNNEL...";
-            const conn = peer.connect(code);
+            status.innerText = "DRILLING TUNNEL...";
+            pBar.style.display = 'block';
+            pFill.style.width = '20%';
+
+            const conn = peer.connect(code, { reliable: true });
+
+            const failTimeout = setTimeout(() => {
+                if(status.innerText !== "✅ DELIVERED") {
+                    status.innerText = "CONNECTION TIMEOUT";
+                    pBar.style.display = 'none';
+                }
+            }, 10000);
 
             conn.on('open', async () => {
+                clearTimeout(failTimeout);
+                pFill.style.width = '60%';
+                status.innerText = "STREAMING DATA...";
+                
                 const buffer = await file.arrayBuffer();
-                conn.send({ file: buffer, name: file.name }); // Direct P2P stream
-                status.innerText = "✅ SENT SUCCESSFULLY!";
+                conn.send({ file: buffer, name: file.name });
+                
+                pFill.style.width = '100%';
+                status.innerText = "✅ DELIVERED";
             });
-            
-            conn.on('error', () => { status.innerText = "❌ ERROR: CODE NOT FOUND"; });
+        }
+
+        // 4. PRINT & SHRED (SECURITY)
+        function printAndWipe() {
+            if(!activeBlobUrl) return;
+            const pWin = window.open(activeBlobUrl, '_blank');
+            if (pWin) {
+                pWin.focus();
+                const checker = setInterval(() => {
+                    if (pWin.closed) {
+                        clearInterval(checker);
+                        URL.revokeObjectURL(activeBlobUrl); // Shred RAM
+                        alert("SECURITY: Data wiped from memory.");
+                        window.location.reload(); 
+                    }
+                }, 1000);
+            } else {
+                alert("Please Enable Pop-ups to allow printing!");
+            }
         }
     </script>
 </body>
